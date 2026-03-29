@@ -1,87 +1,63 @@
-# ============================================================
-#  predict.py — Prédiction avec le modèle KNN Sonar
-# ============================================================
-
 import pandas as pd
-import numpy as np
-import os
 import joblib
-from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-import matplotlib.pyplot as plt
-import seaborn as sns
 
-# Chemins dynamiques
-BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_DIR   = os.path.join(BASE_DIR, "models")
-MODEL_PATH  = os.path.join(MODEL_DIR, "knn_model.pkl")
-SCALER_PATH = os.path.join(MODEL_DIR, "scaler.pkl")
-DATA_PATH   = os.path.join(BASE_DIR, "data", "raw", "sonar.all-data.csv")
-REPORTS_DIR = os.path.join(BASE_DIR, "reports")
+# CHARGEMENT DES MODELES
+kmeans           = joblib.load("../models/kmeans.pkl")
+pca              = joblib.load("../models/pca.pkl")
+scaler_cluster   = joblib.load("../models/scaler_cluster.pkl")
+cluster_features = joblib.load("../models/cluster_features.pkl")
 
-# Charger le modèle et le scaler
-model  = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
-print("✅ Modèle et scaler chargés avec succès !")
+clf          = joblib.load("../models/churn_model.pkl")
+clf_columns  = joblib.load("../models/churn_columns.pkl")
+scaler_clf   = joblib.load("../models/scaler_clf.pkl")
 
+reg          = joblib.load("../models/regression_model.pkl")
+reg_columns  = joblib.load("../models/reg_columns.pkl")
+scaler_reg   = joblib.load("../models/scaler_reg.pkl")
 
-def predict_single(features):
-    if len(features) != 60:
-        raise ValueError(f"❌ Attendu 60 features, reçu {len(features)}")
-    X = np.array(features).reshape(1, -1)
-    X = scaler.transform(X)
-    prediction = model.predict(X)[0]
-    proba      = model.predict_proba(X)[0]
-    label      = 'Mine (M)' if prediction == 1 else 'Roche (R)'
-    print(f"\n🔍 Résultat de la prédiction :")
-    print(f"   → Classe prédite  : {label}")
-    print(f"   → Proba Roche     : {proba[0]*100:.2f}%")
-    print(f"   → Proba Mine      : {proba[1]*100:.2f}%")
-    return label
+print("Modeles charges")
 
+# NOUVEAU CLIENT
+new_client = pd.DataFrame([{
+    "Frequency":                25,
+    "MonetaryTotal":           500,
+    "CustomerTenureDays":      300,
+    "AvgDaysBetweenPurchases":  20,
+    "TotalTransactions":        15
+}])
 
-if __name__ == "__main__":
+print("Client teste :")
+print(new_client)
 
-    print("\n📂 Chargement des données sonar...")
-    columns = [f'F{i}' for i in range(1, 61)] + ['Objet']
-    df = pd.read_csv(DATA_PATH, names=columns)
+# CLUSTERING
+df_cluster = new_client.reindex(columns=cluster_features, fill_value=0).astype(float)
+X_scaled   = scaler_cluster.transform(df_cluster)
+X_pca      = pca.transform(X_scaled)
+cluster    = kmeans.predict(X_pca)[0]
 
-    y_true = df['Objet'].map({'M': 1, 'R': 0})
-    X_all  = df.drop('Objet', axis=1)
+labels = {0: "Clients stables", 1: "Clients a risque"}
+print(f"\nCluster predit  : {cluster}")
+print(f"Interpretation  : {labels.get(cluster, 'Segment ' + str(cluster))}")
 
-    X_scaled    = scaler.transform(X_all)
-    predictions = model.predict(X_scaled)
+# CHURN
+df_clf = new_client.copy()
+df_clf["Cluster"] = cluster
+df_clf = pd.get_dummies(df_clf)
+df_clf = df_clf.reindex(columns=clf_columns, fill_value=0)
+X_clf_scaled  = scaler_clf.transform(df_clf)
+churn_pred    = clf.predict(X_clf_scaled)[0]
+churn_proba   = clf.predict_proba(X_clf_scaled)[0][1]
 
-    # Accuracy
-    acc = accuracy_score(y_true, predictions)
-    print(f"\n🎯 Accuracy globale : {round(acc * 100, 2)}%")
+print(f"\nChurn           : {churn_pred} ({'Risque' if churn_pred == 1 else 'Stable'})")
+print(f"Probabilite     : {churn_proba:.2%}")
 
-    # Rapport
-    print("\n📊 Rapport de classification :")
-    print(classification_report(y_true, predictions, target_names=['Roche (R)', 'Mine (M)']))
+# REVENUE
+df_reg = new_client.copy()
+df_reg["Cluster"] = cluster
+df_reg = pd.get_dummies(df_reg)
+df_reg = df_reg.reindex(columns=reg_columns, fill_value=0)
+X_reg_scaled = scaler_reg.transform(df_reg)
+revenue      = reg.predict(X_reg_scaled)[0]
 
-    # Matrice de confusion (texte)
-    cm = confusion_matrix(y_true, predictions)
-    print("🔲 Matrice de confusion :")
-    print(f"                Prédit Roche   Prédit Mine")
-    print(f"  Réel Roche  :     {cm[0][0]:>5}          {cm[0][1]:>5}")
-    print(f"  Réel Mine   :     {cm[1][0]:>5}          {cm[1][1]:>5}")
-
-    # Matrice de confusion (graphique)
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=['Roche (R)', 'Mine (M)'],
-                yticklabels=['Roche (R)', 'Mine (M)'],
-                linewidths=0.5, linecolor='gray')
-    plt.title('Matrice de Confusion — KNN Sonar', fontsize=13, fontweight='bold')
-    plt.xlabel('Classe Predite', fontsize=11)
-    plt.ylabel('Classe Reelle', fontsize=11)
-    plt.tight_layout()
-
-    os.makedirs(REPORTS_DIR, exist_ok=True)
-    plt.savefig(os.path.join(REPORTS_DIR, "confusion_matrix.png"), dpi=150)
-    print("\n💾 Matrice sauvegardée dans reports/confusion_matrix.png")
-    plt.show()
-
-    # Test échantillon fictif
-    print("\n🧪 Test avec un échantillon fictif...")
-    predict_single([0.5] * 60)
+print(f"\nRevenu estime   : {revenue:.2f} GBP")
+print("\nPrediction terminee !")
