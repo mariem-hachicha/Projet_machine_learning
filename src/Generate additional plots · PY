@@ -1,0 +1,178 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import joblib
+import os
+from sklearn.metrics import confusion_matrix, roc_curve, auc
+
+os.makedirs("../reports", exist_ok=True)
+
+# CHARGEMENT
+X_train = pd.read_csv("../data/train_test/X_train.csv")
+y_train = pd.read_csv("../data/train_test/y_train.csv").squeeze()
+X_test  = pd.read_csv("../data/train_test/X_test.csv")
+y_test  = pd.read_csv("../data/train_test/y_test.csv").squeeze()
+
+clf         = joblib.load("../models/churn_model.pkl")
+scaler_clf  = joblib.load("../models/scaler_clf.pkl")
+clf_columns = joblib.load("../models/churn_columns.pkl")
+reg         = joblib.load("../models/regression_model.pkl")
+scaler_reg  = joblib.load("../models/scaler_reg.pkl")
+reg_columns = joblib.load("../models/reg_columns.pkl")
+
+# ---- Préparation X_test pour clf ----
+to_drop = [c for c in X_test.columns if any(x in c for x in
+           ['ChurnRisk','RFMSegment','Perdu','Satisfaction','Loyalty','AccountStatus','Recency','FirstPurchase'])]
+
+X_test_clean = X_test.copy()
+X_test_clean["Churn"] = y_test.values
+X_test_clean = X_test_clean.drop(columns=to_drop, errors='ignore')
+X_test_clean = pd.get_dummies(X_test_clean, drop_first=True)
+
+y_test2 = X_test_clean["Churn"]
+X_test2 = X_test_clean.drop("Churn", axis=1)
+X_test2 = X_test2.reindex(columns=clf_columns, fill_value=0)
+X_test2_sc = scaler_clf.transform(X_test2)
+
+y_pred  = clf.predict(X_test2_sc)
+y_proba = clf.predict_proba(X_test2_sc)[:, 1]
+
+# ---- Préparation X_test pour reg ----
+X_test_reg = X_test.copy()
+X_test_reg = X_test_reg.drop(columns=to_drop, errors='ignore')
+X_test_reg["Churn"] = y_test.values
+X_test_reg = pd.get_dummies(X_test_reg, drop_first=True)
+
+y_test_reg, y_pred_reg = None, None
+if "MonetaryTotal" in X_test_reg.columns:
+    y_test_reg = X_test_reg["MonetaryTotal"]
+    X_test_reg = X_test_reg.drop("MonetaryTotal", axis=1)
+    X_test_reg = X_test_reg.reindex(columns=reg_columns, fill_value=0)
+    X_test_reg_sc = scaler_reg.transform(X_test_reg)
+    y_pred_reg = reg.predict(X_test_reg_sc)
+
+print("Données prêtes")
+
+# ============================================================
+# 1. CONFUSION MATRIX (déjà existante — ré-générée proprement)
+# ============================================================
+cm = confusion_matrix(y_test2, y_pred)
+fig, ax = plt.subplots(figsize=(6, 5))
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
+            xticklabels=["Fidele", "Churne"],
+            yticklabels=["Fidele", "Churne"], ax=ax)
+ax.set_title("Confusion Matrix - RandomForest Churn")
+ax.set_ylabel("Réel")
+ax.set_xlabel("Prédit")
+plt.tight_layout()
+plt.savefig("../reports/confusion_RandomForest_Churn.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("confusion_RandomForest_Churn.png sauvegardé")
+
+# ============================================================
+# 2. COURBE ROC (déjà existante — ré-générée proprement)
+# ============================================================
+fpr, tpr, _ = roc_curve(y_test2, y_proba)
+roc_auc     = auc(fpr, tpr)
+
+plt.figure(figsize=(7, 6))
+plt.plot(fpr, tpr, color='steelblue', lw=2,
+         label=f"RandomForest Churn (AUC = {roc_auc:.2f})")
+plt.plot([0, 1], [0, 1], color='gray', linestyle='--')
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Courbe ROC - RandomForest Churn")
+plt.legend()
+plt.tight_layout()
+plt.savefig("../reports/roc_RandomForest_Churn.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("roc_RandomForest_Churn.png sauvegardé")
+
+# ============================================================
+# 3. FEATURE IMPORTANCE - CLASSIFICATION (CHURN)
+# ============================================================
+importances_clf = clf.feature_importances_
+feat_names_clf  = list(clf_columns)
+
+fi_clf = pd.Series(importances_clf, index=feat_names_clf).sort_values(ascending=False).head(20)
+
+plt.figure(figsize=(10, 7))
+fi_clf.sort_values().plot(kind='barh', color='steelblue')
+plt.xlabel("Importance")
+plt.title("Feature Importance - RandomForest Churn (Top 20)")
+plt.tight_layout()
+plt.savefig("../reports/feature_importance_churn.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("feature_importance_churn.png sauvegardé")
+
+# ============================================================
+# 4. FEATURE IMPORTANCE - REGRESSION (MonetaryTotal)
+# ============================================================
+importances_reg = reg.feature_importances_
+feat_names_reg  = list(reg_columns)
+
+fi_reg = pd.Series(importances_reg, index=feat_names_reg).sort_values(ascending=False).head(20)
+
+plt.figure(figsize=(10, 7))
+fi_reg.sort_values().plot(kind='barh', color='seagreen')
+plt.xlabel("Importance")
+plt.title("Feature Importance - RandomForest Régression MonetaryTotal (Top 20)")
+plt.tight_layout()
+plt.savefig("../reports/feature_importance_regression.png", dpi=150, bbox_inches="tight")
+plt.close()
+print("feature_importance_regression.png sauvegardé")
+
+# ============================================================
+# 5. REGRESSION RÉEL VS PRÉDIT
+# ============================================================
+if y_test_reg is not None and y_pred_reg is not None:
+    plt.figure(figsize=(8, 7))
+    plt.scatter(y_test_reg, y_pred_reg, alpha=0.5, color='green', s=20)
+    max_val = max(y_test_reg.max(), y_pred_reg.max())
+    plt.plot([0, max_val], [0, max_val], 'r--', label='Parfait')
+    plt.xlabel("Réel (GBP)")
+    plt.ylabel("Prédit (GBP)")
+    plt.title("Régression - Réel vs Prédit (MonetaryTotal)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("../reports/regression_reel_vs_predit.png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print("regression_reel_vs_predit.png sauvegardé")
+
+# ============================================================
+# 6. DISTRIBUTION DES ERREURS DE RÉGRESSION
+# ============================================================
+if y_test_reg is not None and y_pred_reg is not None:
+    errors = y_pred_reg - y_test_reg.values
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    # Histogramme des erreurs
+    axes[0].hist(errors, bins=50, color='coral', edgecolor='white', alpha=0.85)
+    axes[0].axvline(0, color='black', linestyle='--', linewidth=1.2)
+    axes[0].set_xlabel("Erreur (Prédit - Réel) en GBP")
+    axes[0].set_ylabel("Fréquence")
+    axes[0].set_title("Distribution des erreurs de régression")
+
+    # Résidus vs valeurs prédites
+    axes[1].scatter(y_pred_reg, errors, alpha=0.4, color='coral', s=15)
+    axes[1].axhline(0, color='black', linestyle='--', linewidth=1.2)
+    axes[1].set_xlabel("Valeurs prédites (GBP)")
+    axes[1].set_ylabel("Résidus (Prédit - Réel)")
+    axes[1].set_title("Résidus vs Valeurs prédites")
+
+    plt.suptitle("Analyse des erreurs - Régression MonetaryTotal", fontsize=13)
+    plt.tight_layout()
+    plt.savefig("../reports/regression_erreurs_distribution.png", dpi=150, bbox_inches="tight")
+    plt.close()
+    print("regression_erreurs_distribution.png sauvegardé")
+
+print("\nTous les graphiques générés dans reports/")
+print("Fichiers produits :")
+print("  - confusion_RandomForest_Churn.png")
+print("  - roc_RandomForest_Churn.png")
+print("  - feature_importance_churn.png")
+print("  - feature_importance_regression.png")
+print("  - regression_reel_vs_predit.png")
+print("  - regression_erreurs_distribution.png")
